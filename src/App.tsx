@@ -20,12 +20,11 @@ import NilaiPage from './pages/NilaiPage';
 import SoalPage from './pages/SoalPage';
 
 // Auth Screen
-function AuthScreen({ onLogin }: { onLogin: () => void }) {
+function AuthScreen({ onLogin, showToast }: { onLogin: () => void; showToast: (msg: string, type: 'success' | 'error' | 'info') => void }) {
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const { showToast } = useToast();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -49,7 +48,7 @@ function AuthScreen({ onLogin }: { onLogin: () => void }) {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-emerald-50 to-teal-100 p-4">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-emerald-50 to-emerald-100 p-4">
       <div className="max-w-md w-full bg-white/90 backdrop-blur-md rounded-3xl shadow-xl overflow-hidden border border-white">
         <div className="bg-emerald-600 p-8 text-center text-white">
           <div className="w-20 h-20 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-4 backdrop-blur-sm">
@@ -111,6 +110,7 @@ function AuthScreen({ onLogin }: { onLogin: () => void }) {
 
 export default function App() {
   const [user, setUser] = useState<any>(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<ActiveTab>('jadwal');
   const [loading, setLoading] = useState(false);
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
@@ -129,11 +129,20 @@ export default function App() {
 
   // Auth
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null);
-    });
+    supabase.auth.getSession()
+      .then(({ data: { session } }) => {
+        setUser(session?.user ?? null);
+      })
+      .catch(() => {
+        setUser(null);
+      })
+      .finally(() => {
+        setAuthLoading(false);
+      });
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
+      setAuthLoading(false);
     });
     return () => subscription.unsubscribe();
   }, []);
@@ -370,8 +379,29 @@ export default function App() {
     setUser(null);
   };
 
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-emerald-50">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-16 h-16 bg-emerald-600 rounded-2xl flex items-center justify-center shadow-lg">
+            <BookOpen className="w-8 h-8 text-white" />
+          </div>
+          <div className="flex items-center gap-2 text-slate-500">
+            <Loader2 className="w-5 h-5 animate-spin text-emerald-600" />
+            <span className="text-sm font-medium">Memuat SIM KBM Ustaz...</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (!user) {
-    return <AuthScreen onLogin={() => {}} />;
+    return (
+      <>
+        <AuthScreen onLogin={() => {}} showToast={showToast} />
+        <ToastContainer toasts={toasts} onRemove={removeToast} />
+      </>
+    );
   }
 
   const renderContent = () => {
