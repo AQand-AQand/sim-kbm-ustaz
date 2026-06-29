@@ -36,25 +36,31 @@
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
     <script>
-      // Unregister old service workers
+      // Unregister ALL service workers - disable SW temporarily
       if ('serviceWorker' in navigator) {
         navigator.serviceWorker.getRegistrations().then(registrations => {
-          registrations.forEach(registration => registration.unregister());
-        }).catch(err => console.log('[SW] Error unregistering:', err));
+          registrations.forEach(registration => {
+            console.log('[INIT] Unregistering SW:', registration.scope);
+            registration.unregister();
+          });
+        }).catch(err => console.error('[INIT] SW error:', err));
+      }
 
-        // Register new service worker
-        window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(err => {
-            console.log('[SW] Registration failed:', err);
+      // Clear old cache storage
+      if ('caches' in window) {
+        caches.keys().then(cacheNames => {
+          cacheNames.forEach(cacheName => {
+            console.log('[INIT] Deleting cache:', cacheName);
+            caches.delete(cacheName);
           });
         });
       }
 
-      // Clear sessionStorage on page load for clean state
-      if (!sessionStorage.getItem('_init_complete')) {
-        // First time loading
+      // Clear sessionStorage for fresh state
+      if (!window.location.hash.includes('_init')) {
+        console.log('[INIT] Clearing sessionStorage');
         sessionStorage.clear();
-        sessionStorage.setItem('_init_complete', 'true');
+        window.history.replaceState({}, '', window.location.pathname + '#_init');
       }
     </script>
   </body>
