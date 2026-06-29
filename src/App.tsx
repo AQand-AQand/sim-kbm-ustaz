@@ -131,7 +131,7 @@ function SetupScreen({ showToast, onComplete }: { showToast: ShowToast; onComple
             <button
               type="submit"
               disabled={loading}
-              className="w-full bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold py-3 rounded-xl shadow-lg shadow-emerald-200 transition-all disabled:opacity-60 flex items-center justify-center gap-2 mt-2"
+              className="w-full bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold py-3 rounded-xl shadow-lg shadow-emerald-200 transition-all disabled:opacity-60 flex items-center justify-center gap-2"
             >
               {loading && <Loader2 className="w-4 h-4 animate-spin" />}
               {loading ? 'Membuat...' : 'Buat Admin'}
@@ -155,7 +155,7 @@ function AuthScreen({ showToast }: { showToast: ShowToast }) {
     if (msg.includes('User already registered')) return 'ID Login sudah terdaftar.';
     if (msg.includes('Password should be')) return 'Kata sandi minimal 6 karakter.';
     if (msg.includes('unexpected_failure') || msg.includes('schema')) return 'Server database sedang gangguan, mohon coba lagi nanti.';
-  if (msg.includes('500') || msg.includes('Internal Server Error')) return 'Terjadi kesalahan internal pada server autentikasi.';
+    if (msg.includes('500') || msg.includes('Internal Server Error')) return 'Terjadi kesalahan internal pada server autentikasi.';
     return msg;
   };
 
@@ -261,7 +261,7 @@ function AuthScreen({ showToast }: { showToast: ShowToast }) {
             <button
               type="submit"
               disabled={loading}
-              className="w-full bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold py-3 rounded-xl shadow-lg shadow-emerald-200 transition-all disabled:opacity-60 flex items-center justify-center gap-2 mt-2"
+              className="w-full bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold py-3 rounded-xl shadow-lg shadow-emerald-200 transition-all disabled:opacity-60 flex items-center justify-center gap-2"
             >
               {loading && <Loader2 className="w-4 h-4 animate-spin" />}
               {loading ? 'Memproses...' : mode === 'login' ? 'Masuk' : 'Buat Akun'}
@@ -282,9 +282,17 @@ export default function App() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [needsSetup, setNeedsSetup] = useState(false);
-  const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
+  const [activeTab, setActiveTab] = useState<ActiveTab>(() => {
+    // Load activeTab from sessionStorage on mount
+    if (typeof window !== 'undefined') {
+      const saved = sessionStorage.getItem('activeTab') as ActiveTab;
+      return saved || 'dashboard';
+    }
+    return 'dashboard';
+  });
   const [tabHistory, setTabHistory] = useState<ActiveTab[]>([]);
   const backPressCount = useRef(0);
+  const backPressTimer = useRef<NodeJS.Timeout | null>(null);
   const { toasts, showToast, removeToast } = useToast();
 
   // Fetch profile after auth
@@ -321,26 +329,23 @@ export default function App() {
   // Check if setup is needed (no users exist)
   const checkSetupNeeded = async (): Promise<boolean> => {
     try {
-      // Check via Supabase client with anon access
       const { data, error } = await supabase
         .from('profiles')
         .select('id')
         .limit(1);
 
-      // If we get an error about RLS or no rows, setup might be needed
       if (error) {
-        // Permission denied means RLS is blocking - could be no user context
-        // This is expected when there's no logged-in user and anon can't read
-        // Since we added anon_read_profiles policy, this should work
         return true;
       }
 
       return (!data || data.length === 0);
-    } catch {
+    } catch (err) {
+      console.error('Setup check error:', err);
       return false;
     }
   };
 
+  // Initialize auth
   useEffect(() => {
     const initAuth = async () => {
       try {
@@ -352,11 +357,11 @@ export default function App() {
           setProfile(p);
           setNeedsSetup(false);
         } else {
-          // Check if setup is needed
           const setupNeeded = await checkSetupNeeded();
           setNeedsSetup(setupNeeded);
         }
-      } catch {
+      } catch (error) {
+        console.error('Auth init error:', error);
         setUser(null);
         setProfile(null);
       } finally {
@@ -374,47 +379,87 @@ export default function App() {
         setNeedsSetup(false);
       } else {
         setProfile(null);
+        sessionStorage.removeItem('activeTab');
+        setActiveTab('dashboard');
+        setTabHistory([]);
       }
       setAuthLoading(false);
     });
+
     return () => subscription.unsubscribe();
   }, []);
 
+  // Persist activeTab to sessionStorage
+  useEffect(() => {
+    if (user && typeof window !== 'undefined') {
+      sessionStorage.setItem('activeTab', activeTab);
+    }
+  }, [activeTab, user]);
+
   // Track tab changes for back navigation
   const handleTabChange = (tab: ActiveTab) => {
-    setTabHistory(prev => [...prev, activeTab]);
-    setActiveTab(tab);
+    if (tab !== activeTab) {
+      setTabHistory(prev => [...prev, activeTab]);
+      setActiveTab(tab);
+    }
   };
 
-  // Handle Android back button
+  // Handle back navigation
   useEffect(() => {
-    const handleBack = (e: PopStateEvent) => {
+    if (!user) return;
+
+    const handlePopState = (e: PopStateEvent) => {
       e.preventDefault();
-      if (activeTab !== 'dashboard') {
-        const prev = tabHistory[tabHistory.length - 1] ?? 'dashboard';
+
+      if (tabHistory.length > 0) {
+        const previousTab = tabHistory[tabHistory.length - 1];
         setTabHistory(prev => prev.slice(0, -1));
-        setActiveTab(prev);
-        window.history.pushState(null, '', window.location.pathname);
+        setActiveTab(previousTab);
+        backPressCount.current = 0;
+      } else if (activeTab !== 'dashboard') {
+        setActiveTab('dashboard');
         backPressCount.current = 0;
       } else {
+        // On dashboard - handle exit prompt
         const next = backPressCount.current + 1;
         backPressCount.current = next;
+
         if (next >= 2) {
-          showToast('Menutup aplikasi...', 'info');
-          window.history.back();
+          // Double tap confirmed - could implement actual exit here if needed
+          showToast('Tekan sekali lagi untuk keluar aplikasi', 'info');
+          backPressCount.current = 0;
         } else {
           showToast('Tekan sekali lagi untuk keluar', 'info');
-          setTimeout(() => { backPressCount.current = 0; }, 2000);
+          
+          if (backPressTimer.current) {
+            clearTimeout(backPressTimer.current);
+          }
+          
+          backPressTimer.current = setTimeout(() => {
+            backPressCount.current = 0;
+          }, 2000);
         }
-        window.history.pushState(null, '', window.location.pathname);
+      }
+
+      window.history.pushState(null, '', window.location.pathname);
+    };
+
+    // Initialize history stack
+    window.history.pushState(null, '', window.location.pathname);
+    window.addEventListener('popstate', handlePopState);
+
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+      if (backPressTimer.current) {
+        clearTimeout(backPressTimer.current);
       }
     };
-    window.history.pushState(null, '', window.location.pathname);
-    window.addEventListener('popstate', handleBack);
-    return () => window.removeEventListener('popstate', handleBack);
-  }, [activeTab, tabHistory, showToast]);
+  }, [activeTab, tabHistory, showToast, user]);
 
   const handleLogout = async () => {
+    sessionStorage.removeItem('activeTab');
+    setActiveTab('dashboard');
+    setTabHistory([]);
     await supabase.auth.signOut();
   };
 
