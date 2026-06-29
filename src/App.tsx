@@ -75,9 +75,6 @@ function SetupScreen({ showToast, onComplete }: { showToast: ShowToast; onComple
     try {
       const email = `${idLogin.toLowerCase().replace(/[^a-z0-9]/g, '')}@madrasah.local`;
 
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 10000);
-
       const response = await fetch(`${SUPABASE_URL}/functions/v1/create-admin`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -88,10 +85,8 @@ function SetupScreen({ showToast, onComplete }: { showToast: ShowToast; onComple
           role: 'admin',
           setup_key: 'simkbm-setup-2024',
         }),
-        signal: controller.signal,
       });
 
-      clearTimeout(timeout);
       const result = await response.json();
 
       if (!response.ok) {
@@ -101,11 +96,7 @@ function SetupScreen({ showToast, onComplete }: { showToast: ShowToast; onComple
       showToast('Admin berhasil dibuat! Silakan login.', 'success');
       onComplete();
     } catch (err: any) {
-      if (err.name === 'AbortError') {
-        showToast('Koneksi timeout. Coba lagi.', 'error');
-      } else {
-        showToast(err.message || 'Terjadi kesalahan', 'error');
-      }
+      showToast(err.message || 'Terjadi kesalahan', 'error');
     } finally {
       setLoading(false);
     }
@@ -200,9 +191,6 @@ function AuthScreen({ showToast }: { showToast: ShowToast }) {
       if (idLogin.includes('@')) {
         email = idLogin.toLowerCase().trim();
       } else {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 5000);
-
         try {
           const { data: profile } = await supabase
             .from('profiles')
@@ -210,15 +198,12 @@ function AuthScreen({ showToast }: { showToast: ShowToast }) {
             .eq('id_login', idLogin.toLowerCase().trim())
             .maybeSingle();
 
-          clearTimeout(timeout);
-
           if (profile?.email) {
             email = profile.email;
           } else {
             email = `${idLogin.toLowerCase().replace(/[^a-z0-9]/g, '')}@madrasah.local`;
           }
-        } catch (err) {
-          clearTimeout(timeout);
+        } catch {
           email = `${idLogin.toLowerCase().replace(/[^a-z0-9]/g, '')}@madrasah.local`;
         }
       }
@@ -321,8 +306,8 @@ export default function App() {
   const initRef = useRef(false);
   const { toasts, showToast, removeToast } = useToast();
 
-  // Fetch profile with timeout
-  const fetchProfile = async (userId: string, signal?: AbortSignal) => {
+  // Fetch profile
+  const fetchProfile = async (userId: string) => {
     try {
       const { data, error } = await supabase
         .from('profiles')
@@ -331,37 +316,32 @@ export default function App() {
         .maybeSingle();
 
       if (error && error.code !== 'PGRST116') {
-        console.error('Error fetching profile:', error);
+        console.error('Profile fetch error:', error);
         return null;
       }
 
       if (!data) {
-        try {
-          const { data: newProfile, error: createError } = await supabase
-            .from('profiles')
-            .insert([{ id: userId, role: 'ustaz', is_active: true }])
-            .select()
-            .maybeSingle();
+        const { data: newProfile, error: createError } = await supabase
+          .from('profiles')
+          .insert([{ id: userId, role: 'ustaz', is_active: true }])
+          .select()
+          .maybeSingle();
 
-          if (createError) {
-            console.error('Error creating profile:', createError);
-            return null;
-          }
-          return newProfile as Profile;
-        } catch (err) {
-          console.error('Profile creation error:', err);
+        if (createError) {
+          console.error('Profile create error:', createError);
           return null;
         }
+        return newProfile as Profile;
       }
 
       return data as Profile;
     } catch (err) {
-      console.error('Fetch profile error:', err);
+      console.error('Profile error:', err);
       return null;
     }
   };
 
-  // Check setup needed
+  // Check setup
   const checkSetupNeeded = async () => {
     try {
       const { data, error } = await supabase
@@ -369,77 +349,51 @@ export default function App() {
         .select('id', { count: 'exact' })
         .limit(1);
 
-      if (error) {
-        console.error('Setup check error:', error);
-        return true;
-      }
-
+      if (error) return true;
       return (!data || data.length === 0);
-    } catch (err) {
-      console.error('Setup check error:', err);
+    } catch {
       return false;
     }
   };
 
-  // Initialize app
+  // Initialize
   useEffect(() => {
     if (initRef.current) return;
     initRef.current = true;
 
     const initApp = async () => {
       try {
+        console.log('[APP] Initializing...');
         setAuthLoading(true);
         setError(null);
 
-        // Get session with timeout
-        const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Session check timeout')), 8000)
-        );
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
 
-        const sessionPromise = supabase.auth.getSession();
-
-        const { data: { session } } = await Promise.race([
-          sessionPromise,
-          timeoutPromise,
-        ]) as any;
+        if (sessionError) throw sessionError;
 
         if (session?.user) {
+          console.log('[APP] User logged in:', session.user.id);
           setUser(session.user);
 
-          // Fetch profile in background (don't wait)
+          // Fetch profile in background
           fetchProfile(session.user.id).then(p => {
             if (p) setProfile(p);
           });
 
-          // Restore tab from session storage
+          // Restore tab
           const saved = sessionStorage.getItem('activeTab') as ActiveTab;
-          if (
-            saved &&
-            [
-              'dashboard',
-              'jadwal',
-              'murid',
-              'absensi',
-              'jurnal',
-              'nilai',
-              'sikap',
-              'catatan',
-              'soal',
-              'agenda',
-              'admin',
-            ].includes(saved)
-          ) {
+          if (saved && ['dashboard', 'jadwal', 'murid', 'absensi', 'jurnal', 'nilai', 'sikap', 'catatan', 'soal', 'agenda', 'admin'].includes(saved)) {
             setActiveTab(saved);
           }
-
-          setNeedsSetup(false);
         } else {
+          console.log('[APP] No session, checking setup');
           const setupNeeded = await checkSetupNeeded();
           setNeedsSetup(setupNeeded);
         }
       } catch (err: any) {
-        console.error('App init error:', err);
-        setError(err.message || 'Gagal menginisialisasi aplikasi');
+        console.error('[APP] Init error:', err);
+        setError(err.message || 'Gagal menginisialisasi');
+        setUser(null);
       } finally {
         setAuthLoading(false);
       }
@@ -447,44 +401,34 @@ export default function App() {
 
     initApp();
 
-    // Subscribe to auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (_event, session) => {
-        if (session?.user) {
-          setUser(session.user);
-          const p = await fetchProfile(session.user.id);
-          if (p) setProfile(p);
-          setNeedsSetup(false);
-          setError(null);
-        } else {
-          setUser(null);
-          setProfile(null);
-          sessionStorage.removeItem('activeTab');
-          setActiveTab('dashboard');
-        }
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (session?.user) {
+        setUser(session.user);
+        const p = await fetchProfile(session.user.id);
+        if (p) setProfile(p);
+        setNeedsSetup(false);
+        setError(null);
+      } else {
+        setUser(null);
+        setProfile(null);
+        setActiveTab('dashboard');
       }
-    );
+    });
 
-    return () => {
-      subscription?.unsubscribe();
-    };
+    return () => subscription?.unsubscribe();
   }, []);
 
-  // Persist active tab
+  // Persist tab
   useEffect(() => {
-    if (user) {
-      sessionStorage.setItem('activeTab', activeTab);
-    }
+    if (user) sessionStorage.setItem('activeTab', activeTab);
   }, [activeTab, user]);
 
   const handleTabChange = (tab: ActiveTab) => {
-    if (tab !== activeTab) {
-      setActiveTab(tab);
-    }
+    if (tab !== activeTab) setActiveTab(tab);
   };
 
   const handleLogout = async () => {
-    sessionStorage.removeItem('activeTab');
+    sessionStorage.clear();
     setActiveTab('dashboard');
     await supabase.auth.signOut();
   };
@@ -495,7 +439,6 @@ export default function App() {
     window.location.reload();
   };
 
-  // Error screen
   if (error && !authLoading) {
     return (
       <>
@@ -505,12 +448,8 @@ export default function App() {
     );
   }
 
-  // Loading screen
-  if (authLoading) {
-    return <LoadingScreen />;
-  }
+  if (authLoading) return <LoadingScreen />;
 
-  // Setup screen
   if (needsSetup) {
     return (
       <>
@@ -520,7 +459,6 @@ export default function App() {
     );
   }
 
-  // Login screen
   if (!user) {
     return (
       <>
@@ -532,30 +470,18 @@ export default function App() {
 
   const renderPage = () => {
     switch (activeTab) {
-      case 'dashboard':
-        return <DashboardPage showToast={showToast} profile={profile} />;
-      case 'jadwal':
-        return <JadwalPage showToast={showToast} />;
-      case 'murid':
-        return <MuridPage showToast={showToast} />;
-      case 'absensi':
-        return <AbsensiPage showToast={showToast} />;
-      case 'jurnal':
-        return <JurnalPage showToast={showToast} />;
-      case 'nilai':
-        return <NilaiPage showToast={showToast} />;
-      case 'sikap':
-        return <SikapPage showToast={showToast} />;
-      case 'catatan':
-        return <CatatanPage showToast={showToast} />;
-      case 'soal':
-        return <SoalPage showToast={showToast} />;
-      case 'agenda':
-        return <AgendaPage showToast={showToast} />;
-      case 'admin':
-        return <AdminPage showToast={showToast} profile={profile} />;
-      default:
-        return null;
+      case 'dashboard': return <DashboardPage showToast={showToast} profile={profile} />;
+      case 'jadwal': return <JadwalPage showToast={showToast} />;
+      case 'murid': return <MuridPage showToast={showToast} />;
+      case 'absensi': return <AbsensiPage showToast={showToast} />;
+      case 'jurnal': return <JurnalPage showToast={showToast} />;
+      case 'nilai': return <NilaiPage showToast={showToast} />;
+      case 'sikap': return <SikapPage showToast={showToast} />;
+      case 'catatan': return <CatatanPage showToast={showToast} />;
+      case 'soal': return <SoalPage showToast={showToast} />;
+      case 'agenda': return <AgendaPage showToast={showToast} />;
+      case 'admin': return <AdminPage showToast={showToast} profile={profile} />;
+      default: return null;
     }
   };
 
