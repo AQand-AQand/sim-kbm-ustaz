@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { BookOpen, Loader2 } from 'lucide-react';
+import { BookOpen, Loader2, Shield, AlertCircle } from 'lucide-react';
 import { supabase } from './lib/supabase';
 import Layout from './components/Layout';
 import ToastContainer from './components/ToastContainer';
@@ -18,6 +18,8 @@ import SoalPage from './pages/SoalPage';
 import AgendaPage from './pages/AgendaPage';
 import AdminPage from './pages/AdminPage';
 
+const SUPABASE_URL = 'https://intkcrhsinezswldmokr.supabase.co';
+
 function LoadingScreen() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-emerald-50">
@@ -28,6 +30,113 @@ function LoadingScreen() {
         <div className="flex items-center gap-2 text-slate-500">
           <Loader2 className="w-5 h-5 animate-spin text-emerald-600" />
           <span className="text-sm font-medium">Memuat aplikasi...</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SetupScreen({ showToast, onComplete }: { showToast: ShowToast; onComplete: () => void }) {
+  const [idLogin, setIdLogin] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!idLogin || !password) {
+      showToast('Isi ID Login dan kata sandi', 'error');
+      return;
+    }
+
+    if (password.length < 6) {
+      showToast('Kata sandi minimal 6 karakter', 'error');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const email = `${idLogin.toLowerCase().replace(/[^a-z0-9]/g, '')}@madrasah.local`;
+
+      // Call edge function to create admin
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/create-admin`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email,
+          password,
+          nama_lengkap: idLogin,
+          role: 'admin',
+          setup_key: 'simkbm-setup-2024',
+        }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Gagal membuat admin');
+      }
+
+      showToast('Admin berhasil dibuat! Silakan login.', 'success');
+      onComplete();
+    } catch (err: any) {
+      showToast(err.message || 'Terjadi kesalahan', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-amber-50 via-white to-emerald-50 p-4">
+      <div className="w-full max-w-sm">
+        <div className="text-center mb-8">
+          <div className="w-20 h-20 bg-emerald-600 rounded-3xl flex items-center justify-center mx-auto mb-4 shadow-xl shadow-emerald-200">
+            <Shield className="w-10 h-10 text-white" />
+          </div>
+          <h1 className="text-2xl font-bold text-slate-800">Setup Awal</h1>
+          <p className="text-slate-500 text-sm mt-1">Buat akun admin pertama</p>
+        </div>
+
+        <div className="bg-white rounded-3xl shadow-xl border border-amber-200 p-6">
+          <div className="bg-amber-50 rounded-xl p-3 mb-5 flex items-start gap-2">
+            <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+            <p className="text-xs text-amber-700">
+              Selamat datang! Ini adalah pengaturan pertama kali. Buat akun admin untuk mulai menggunakan aplikasi.
+            </p>
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1.5">ID Login Admin</label>
+              <input
+                type="text"
+                value={idLogin}
+                onChange={e => setIdLogin(e.target.value)}
+                className="input-field"
+                placeholder="Contoh: admin"
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1.5">Kata Sandi</label>
+              <input
+                type="password"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                className="input-field"
+                placeholder="Minimal 6 karakter"
+                required
+                minLength={6}
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold py-3 rounded-xl shadow-lg shadow-emerald-200 transition-all disabled:opacity-60 flex items-center justify-center gap-2 mt-2"
+            >
+              {loading && <Loader2 className="w-4 h-4 animate-spin" />}
+              {loading ? 'Membuat...' : 'Buat Admin'}
+            </button>
+          </form>
         </div>
       </div>
     </div>
@@ -154,6 +263,7 @@ export default function App() {
   const [user, setUser] = useState<any>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [needsSetup, setNeedsSetup] = useState(false);
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
   const [tabHistory, setTabHistory] = useState<ActiveTab[]>([]);
   const backPressCount = useRef(0);
@@ -190,23 +300,60 @@ export default function App() {
     return data as Profile;
   };
 
+  // Check if setup is needed (no users exist)
+  const checkSetupNeeded = async (): Promise<boolean> => {
+    try {
+      // Check via Supabase client with anon access
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('id')
+        .limit(1);
+
+      // If we get an error about RLS or no rows, setup might be needed
+      if (error) {
+        // Permission denied means RLS is blocking - could be no user context
+        // This is expected when there's no logged-in user and anon can't read
+        // Since we added anon_read_profiles policy, this should work
+        return true;
+      }
+
+      return (!data || data.length === 0);
+    } catch {
+      return false;
+    }
+  };
+
   useEffect(() => {
-    supabase.auth.getSession()
-      .then(async ({ data: { session } }) => {
-        setUser(session?.user ?? null);
+    const initAuth = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+
         if (session?.user) {
+          setUser(session.user);
           const p = await fetchProfile(session.user.id);
           setProfile(p);
+          setNeedsSetup(false);
+        } else {
+          // Check if setup is needed
+          const setupNeeded = await checkSetupNeeded();
+          setNeedsSetup(setupNeeded);
         }
-      })
-      .catch(() => setUser(null))
-      .finally(() => setAuthLoading(false));
+      } catch {
+        setUser(null);
+        setProfile(null);
+      } finally {
+        setAuthLoading(false);
+      }
+    };
+
+    initAuth();
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       setUser(session?.user ?? null);
       if (session?.user) {
         const p = await fetchProfile(session.user.id);
         setProfile(p);
+        setNeedsSetup(false);
       } else {
         setProfile(null);
       }
@@ -254,6 +401,18 @@ export default function App() {
   };
 
   if (authLoading) return <LoadingScreen />;
+
+  if (needsSetup) {
+    return (
+      <>
+        <SetupScreen
+          showToast={showToast}
+          onComplete={() => setNeedsSetup(false)}
+        />
+        <ToastContainer toasts={toasts} onRemove={removeToast} />
+      </>
+    );
+  }
 
   if (!user) {
     return (
