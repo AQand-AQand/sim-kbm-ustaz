@@ -15,9 +15,11 @@ import {
   Home,
   FileText,
   Shield,
+  Download,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import type { ActiveTab, Profile } from '../types';
+import { usePWAInstall } from '../hooks/usePWAInstall';
 
 interface LayoutProps {
   activeTab: ActiveTab;
@@ -44,6 +46,7 @@ const navItems: { id: ActiveTab; icon: React.ElementType; label: string; adminOn
 export default function Layout({ activeTab, setActiveTab, profile, onLogout, children }: LayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [now, setNow] = useState(new Date());
+  const { isInstallable, isInstalled, promptInstall } = usePWAInstall();
 
   const isAdmin = profile?.role === 'admin';
 
@@ -106,6 +109,16 @@ export default function Layout({ activeTab, setActiveTab, profile, onLogout, chi
               <p className="text-[10px] text-slate-400">{profile?.role === 'admin' ? 'Administrator' : profile?.role === 'operator' ? 'Operator' : 'Ustaz'}</p>
             </div>
           </div>
+          {/* Install App Button */}
+          {isInstallable && !isInstalled && (
+            <button
+              onClick={promptInstall}
+              className="w-full flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl font-semibold transition-colors text-sm"
+            >
+              <Download className="w-4 h-4" />
+              <span>Instal Aplikasi</span>
+            </button>
+          )}
           <button
             onClick={onLogout}
             className="w-full flex items-center justify-center gap-2 text-rose-500 hover:bg-rose-50 px-4 py-2.5 rounded-xl font-semibold transition-colors text-sm"
@@ -149,7 +162,17 @@ export default function Layout({ activeTab, setActiveTab, profile, onLogout, chi
                 );
               })}
             </div>
-            <div className="p-3 border-t border-slate-100">
+            <div className="p-3 border-t border-slate-100 space-y-2">
+              {/* Install App Button - Mobile */}
+              {isInstallable && !isInstalled && (
+                <button
+                  onClick={() => { promptInstall(); setSidebarOpen(false); }}
+                  className="w-full flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl font-semibold transition-colors"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>Instal Aplikasi</span>
+                </button>
+              )}
               <button
                 onClick={() => { onLogout(); setSidebarOpen(false); }}
                 className="w-full flex items-center justify-center gap-2 text-rose-500 hover:bg-rose-50 px-4 py-2.5 rounded-xl font-semibold transition-colors"
