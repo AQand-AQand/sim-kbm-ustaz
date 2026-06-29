@@ -45,6 +45,8 @@ function AuthScreen({ showToast }: { showToast: ShowToast }) {
     if (msg.includes('Email not confirmed')) return 'Email belum dikonfirmasi.';
     if (msg.includes('User already registered')) return 'ID Login sudah terdaftar.';
     if (msg.includes('Password should be')) return 'Kata sandi minimal 6 karakter.';
+    if (msg.includes('unexpected_failure') || msg.includes('schema')) return 'Server database sedang gangguan, mohon coba lagi nanti.';
+  if (msg.includes('500') || msg.includes('Internal Server Error')) return 'Terjadi kesalahan internal pada server autentikasi.';
     return msg;
   };
 
