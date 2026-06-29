@@ -36,6 +36,24 @@ function LoadingScreen() {
   );
 }
 
+function ErrorScreen({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-emerald-50 p-4">
+      <div className="max-w-sm w-full text-center">
+        <div className="text-6xl mb-4">⚠️</div>
+        <h1 className="text-2xl font-bold text-slate-800 mb-2">Aplikasi Gagal Dimuat</h1>
+        <p className="text-slate-600 mb-6">{message}</p>
+        <button
+          onClick={onRetry}
+          className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 px-6 rounded-xl shadow-lg shadow-emerald-200 transition-all"
+        >
+          Coba Lagi
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function SetupScreen({ showToast, onComplete }: { showToast: ShowToast; onComplete: () => void }) {
   const [idLogin, setIdLogin] = useState('');
   const [password, setPassword] = useState('');
@@ -57,7 +75,6 @@ function SetupScreen({ showToast, onComplete }: { showToast: ShowToast; onComple
     try {
       const email = `${idLogin.toLowerCase().replace(/[^a-z0-9]/g, '')}@madrasah.local`;
 
-      // Call edge function to create admin
       const response = await fetch(`${SUPABASE_URL}/functions/v1/create-admin`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -170,11 +187,9 @@ function AuthScreen({ showToast }: { showToast: ShowToast }) {
     try {
       let email: string;
 
-      // Check if input is already an email
       if (idLogin.includes('@')) {
         email = idLogin.toLowerCase().trim();
       } else {
-        // Try to lookup real email from profiles table by id_login
         const { data: profile } = await supabase
           .from('profiles')
           .select('email')
@@ -184,7 +199,6 @@ function AuthScreen({ showToast }: { showToast: ShowToast }) {
         if (profile?.email) {
           email = profile.email;
         } else {
-          // Fallback: try id_login as email prefix with madrasah.local
           email = `${idLogin.toLowerCase().replace(/[^a-z0-9]/g, '')}@madrasah.local`;
         }
       }
@@ -282,86 +296,111 @@ export default function App() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [needsSetup, setNeedsSetup] = useState(false);
-  const [activeTab, setActiveTab] = useState<ActiveTab>(() => {
-    // Load activeTab from sessionStorage on mount
-    if (typeof window !== 'undefined') {
-      const saved = sessionStorage.getItem('activeTab') as ActiveTab;
-      return saved || 'dashboard';
-    }
-    return 'dashboard';
-  });
+  const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
   const [tabHistory, setTabHistory] = useState<ActiveTab[]>([]);
-  const backPressCount = useRef(0);
-  const backPressTimer = useRef<NodeJS.Timeout | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const initRef = useRef(false);
   const { toasts, showToast, removeToast } = useToast();
 
   // Fetch profile after auth
   const fetchProfile = async (userId: string) => {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', userId)
-      .maybeSingle();
-
-    if (error) {
-      console.error('Error fetching profile:', error);
-      return null;
-    }
-
-    // If no profile exists, create one with default ustaz role
-    if (!data) {
-      const { data: newProfile, error: createError } = await supabase
+    try {
+      const { data, error } = await supabase
         .from('profiles')
-        .insert([{ id: userId, role: 'ustaz', is_active: true }])
-        .select()
+        .select('*')
+        .eq('id', userId)
         .maybeSingle();
 
-      if (createError) {
-        console.error('Error creating profile:', createError);
+      if (error && error.code !== 'PGRST116') {
+        console.error('Error fetching profile:', error);
         return null;
       }
-      return newProfile as Profile;
-    }
 
-    return data as Profile;
+      if (!data) {
+        const { data: newProfile, error: createError } = await supabase
+          .from('profiles')
+          .insert([{ id: userId, role: 'ustaz', is_active: true }])
+          .select()
+          .maybeSingle();
+
+        if (createError) {
+          console.error('Error creating profile:', createError);
+          return null;
+        }
+        return newProfile as Profile;
+      }
+
+      return data as Profile;
+    } catch (err) {
+      console.error('Fetch profile exception:', err);
+      return null;
+    }
   };
 
-  // Check if setup is needed (no users exist)
+  // Check if setup is needed
   const checkSetupNeeded = async (): Promise<boolean> => {
     try {
       const { data, error } = await supabase
         .from('profiles')
-        .select('id')
+        .select('id', { count: 'exact' })
         .limit(1);
 
       if (error) {
+        console.error('Setup check error:', error);
         return true;
       }
 
       return (!data || data.length === 0);
     } catch (err) {
-      console.error('Setup check error:', err);
+      console.error('Setup check exception:', err);
       return false;
     }
   };
 
-  // Initialize auth
+  // Initialize auth - run once
   useEffect(() => {
+    if (initRef.current) return;
+    initRef.current = true;
+
     const initAuth = async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
+        setAuthLoading(true);
+        setError(null);
+
+        // Add timeout to prevent infinite loading
+        const timeoutId = setTimeout(() => {
+          if (authLoading) {
+            setError('Koneksi ke server timeout. Periksa koneksi internet Anda.');
+            setAuthLoading(false);
+          }
+        }, 15000);
+
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+        clearTimeout(timeoutId);
+
+        if (sessionError) {
+          console.error('Session error:', sessionError);
+          throw sessionError;
+        }
 
         if (session?.user) {
           setUser(session.user);
           const p = await fetchProfile(session.user.id);
-          setProfile(p);
+          if (p) {
+            setProfile(p);
+            const saved = sessionStorage.getItem('activeTab') as ActiveTab;
+            if (saved && ['dashboard', 'jadwal', 'murid', 'absensi', 'jurnal', 'nilai', 'sikap', 'catatan', 'soal', 'agenda', 'admin'].includes(saved)) {
+              setActiveTab(saved);
+            }
+          }
           setNeedsSetup(false);
         } else {
           const setupNeeded = await checkSetupNeeded();
           setNeedsSetup(setupNeeded);
         }
-      } catch (error) {
-        console.error('Auth init error:', error);
+      } catch (err: any) {
+        console.error('Auth init error:', err);
+        setError(err.message || 'Gagal menginisialisasi aplikasi');
         setUser(null);
         setProfile(null);
       } finally {
@@ -371,90 +410,41 @@ export default function App() {
 
     initAuth();
 
+    // Subscribe to auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      setUser(session?.user ?? null);
       if (session?.user) {
+        setUser(session.user);
         const p = await fetchProfile(session.user.id);
         setProfile(p);
         setNeedsSetup(false);
+        setError(null);
       } else {
+        setUser(null);
         setProfile(null);
         sessionStorage.removeItem('activeTab');
         setActiveTab('dashboard');
         setTabHistory([]);
       }
-      setAuthLoading(false);
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      subscription?.unsubscribe();
+    };
   }, []);
 
-  // Persist activeTab to sessionStorage
+  // Persist activeTab
   useEffect(() => {
     if (user && typeof window !== 'undefined') {
       sessionStorage.setItem('activeTab', activeTab);
     }
   }, [activeTab, user]);
 
-  // Track tab changes for back navigation
   const handleTabChange = (tab: ActiveTab) => {
     if (tab !== activeTab) {
       setTabHistory(prev => [...prev, activeTab]);
       setActiveTab(tab);
     }
   };
-
-  // Handle back navigation
-  useEffect(() => {
-    if (!user) return;
-
-    const handlePopState = (e: PopStateEvent) => {
-      e.preventDefault();
-
-      if (tabHistory.length > 0) {
-        const previousTab = tabHistory[tabHistory.length - 1];
-        setTabHistory(prev => prev.slice(0, -1));
-        setActiveTab(previousTab);
-        backPressCount.current = 0;
-      } else if (activeTab !== 'dashboard') {
-        setActiveTab('dashboard');
-        backPressCount.current = 0;
-      } else {
-        // On dashboard - handle exit prompt
-        const next = backPressCount.current + 1;
-        backPressCount.current = next;
-
-        if (next >= 2) {
-          // Double tap confirmed - could implement actual exit here if needed
-          showToast('Tekan sekali lagi untuk keluar aplikasi', 'info');
-          backPressCount.current = 0;
-        } else {
-          showToast('Tekan sekali lagi untuk keluar', 'info');
-          
-          if (backPressTimer.current) {
-            clearTimeout(backPressTimer.current);
-          }
-          
-          backPressTimer.current = setTimeout(() => {
-            backPressCount.current = 0;
-          }, 2000);
-        }
-      }
-
-      window.history.pushState(null, '', window.location.pathname);
-    };
-
-    // Initialize history stack
-    window.history.pushState(null, '', window.location.pathname);
-    window.addEventListener('popstate', handlePopState);
-
-    return () => {
-      window.removeEventListener('popstate', handlePopState);
-      if (backPressTimer.current) {
-        clearTimeout(backPressTimer.current);
-      }
-    };
-  }, [activeTab, tabHistory, showToast, user]);
 
   const handleLogout = async () => {
     sessionStorage.removeItem('activeTab');
@@ -463,8 +453,29 @@ export default function App() {
     await supabase.auth.signOut();
   };
 
-  if (authLoading) return <LoadingScreen />;
+  const handleRetry = () => {
+    setError(null);
+    setAuthLoading(true);
+    initRef.current = false;
+    window.location.reload();
+  };
 
+  // Show error screen
+  if (error && authLoading === false) {
+    return (
+      <>
+        <ErrorScreen message={error} onRetry={handleRetry} />
+        <ToastContainer toasts={toasts} onRemove={removeToast} />
+      </>
+    );
+  }
+
+  // Show loading screen
+  if (authLoading) {
+    return <LoadingScreen />;
+  }
+
+  // Show setup screen
   if (needsSetup) {
     return (
       <>
@@ -477,6 +488,7 @@ export default function App() {
     );
   }
 
+  // Show login screen
   if (!user) {
     return (
       <>
